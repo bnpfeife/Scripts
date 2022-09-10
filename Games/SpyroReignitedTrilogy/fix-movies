@@ -1,0 +1,99 @@
+#!/bin/bash
+set -o errexit \
+    -o nounset \
+    -o pipefail
+
+{
+  which ffmpeg
+  which jq
+  which mediainfo
+} 1>/dev/null
+
+content_dir=${content_dir:-"${HOME}/.steam/steam/steamapps/common/Spyro Reignited Trilogy/Falcon/Content"}
+target_dir="${content_dir}/Movies"
+backup_dir="${content_dir}/Movies.backup"
+
+function map_language() {
+  # This array matches the track number to the corresponding
+  # language. Do not re-arrange this array as that will
+  # cause language mismatches when translating.
+  local languages=(
+   "ENGLISH"
+   "ARABIC"
+   "DANISH"
+   "GERMAN"
+   "SPANISH (SPAIN)"
+   "SPANISH (MEXICO)"
+   "FINNISH"
+   "FRENCH"
+   "ITALIAN"
+   "DUTCH"
+   "NORWEGIAN"
+   "POLISH"
+   "PORTUGUESE"
+  )
+
+  # iterate through the languages
+  for i in "${!languages[@]}"; do
+    if [[ "${languages[$i]}" == "${1}" ]]; then
+      printf '%d\n' "${i}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+track="$(map_language "${1}")"
+
+function audio_track_count() {
+  local jq_query='''
+    .media.track | map
+    (
+      select(
+        .["@type"] == "Audio"
+      )
+    ) | length
+  '''
+
+  mediainfo --output=JSON "${1}" | jq "${jq_query}"
+}
+
+if [[ ! -d ${backup_dir} ]]; then
+  # If the backup directory does not exist, move the original
+  # videos into the backup directory. The backup directory is
+  # never modified after the move.
+  mv "${target_dir}" "${backup_dir}"
+
+  mkdir "${target_dir}"
+fi
+
+# process each video in the directory
+for path in "${backup_dir}"/*.mp4
+do
+  file="$(basename "${path}")"
+
+  if [[ "$(audio_track_count "${path}")" -gt 1 ]]
+  then
+    printf 'Translating %s...\n' "${file}"
+
+    # Videos with multiple language audio tracks only have a single
+    # video track. Therefore, always copy the first video track
+    # and only the matching audio track to the target.
+    ffmpeg -i "${path}" \
+      -map "0:a:${track}" \
+      -map 0:v:0 \
+      -c:a copy \
+      -c:v copy \
+      -y \
+      "${target_dir}/${file}" \
+        1>/dev/null \
+        2>/dev/null
+  else
+    printf 'Copying %s...\n' "${file}"
+
+    # If the video only has a single audio track, do not
+    # waste time translating the original video.
+    cp "${path}" "${target_dir}/${file}"
+ fi
+done
